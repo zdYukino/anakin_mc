@@ -8,4 +8,4 @@ source /opt/ros/humble/setup.bash
 export AMENT_PREFIX_PATH="$sdk_prefix:${AMENT_PREFIX_PATH:-}"
 export CMAKE_PREFIX_PATH="$sdk_prefix:${CMAKE_PREFIX_PATH:-}"
 cd -- "$repo"
-colcon build --base-paths "$repo" --event-handlers console_direct+ --cmake-args -DCMAKE_BUILD_TYPE=RelWithDebInfo -DONNXRUNTIME_ROOT="${ONNXRUNTIME_ROOT:-$ws/deps/onnxruntime-linux-x64-1.20.1}" "$@"
+colcon build --cmake-force-configure --base-paths "$repo" --event-handlers console_direct+ --cmake-args -DCMAKE_BUILD_TYPE=RelWithDebInfo -DONNXRUNTIME_ROOT="${ONNXRUNTIME_ROOT:-$ws/deps/onnxruntime-linux-x64-1.20.1}" "$@"

@@ -101,7 +101,7 @@ class Node final : public rclcpp::Node {
       return;
     }
     if (zero(q.session_id) || zero(q.request_id) || q.source_state_seq == 0 ||
-        q.schema_id != schema_id || q.gain_profile != "g1_asap_sim_v1" || q.timeout.sec < 1 ||
+        q.schema_id != schema_id || !known_gain_profile(q.gain_profile) || q.timeout.sec < 1 ||
         q.timeout.sec > 10 || q.timeout.nanosec >= 1000000000) {
       reject(Switch::Request::INVALID, "Invalid schema, UUID, profile or timeout");
       return;
@@ -156,16 +156,15 @@ class Node final : public rclcpp::Node {
     status_ = &s;
   }
   void publish_statuses() {
-    if (statuses_.empty()) {
-      Status s;
-      s.header.stamp = now();
-      s.schema_version = schema_version;
-      s.schema_id = schema_id;
-      s.mc_instance_id = instance_;
-      s.detail = "Instance discovery; no session accepted";
-      status_pub_->publish(s);
-      return;
-    }
+    // Discovery is independent of the retained transaction journal. A fresh env
+    // session must discover this instance without accepting an old session status.
+    Status discovery;
+    discovery.header.stamp = now();
+    discovery.schema_version = schema_version;
+    discovery.schema_id = schema_id;
+    discovery.mc_instance_id = instance_;
+    discovery.detail = "Instance discovery; session authorization is separate";
+    status_pub_->publish(discovery);
     for (auto& item : statuses_) {
       item.second.header.stamp = now();
       status_pub_->publish(item.second);
@@ -208,6 +207,10 @@ class Node final : public rclcpp::Node {
       return;
     }
     const auto& f = *latest_;
+    if (f.gain_profile != current_.gain_profile) {
+      fail("State gain profile differs from transaction");
+      return;
+    }
     if (f.state_seq < current_.source_state_seq || f.state_seq <= last_state_seq_) return;
     last_state_seq_ = f.state_seq;
     try {
