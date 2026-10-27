@@ -101,8 +101,9 @@ class Node final : public rclcpp::Node {
       return;
     }
     if (zero(q.session_id) || zero(q.request_id) || q.source_state_seq == 0 ||
-        q.schema_id != schema_id || !known_gain_profile(q.gain_profile) || q.timeout.sec < 1 ||
-        q.timeout.sec > 10 || q.timeout.nanosec >= 1000000000) {
+        q.schema_id != schema_id ||
+        !known_execution_contract(q.execution_profile, q.command_semantics, q.gain_profile) ||
+        q.timeout.sec < 1 || q.timeout.sec > 10 || q.timeout.nanosec >= 1000000000) {
       reject(Switch::Request::INVALID, "Invalid schema, UUID, profile or timeout");
       return;
     }
@@ -140,6 +141,9 @@ class Node final : public rclcpp::Node {
     requested_at_ = Clock::now();
     a.accepted = true;
     a.reason = Switch::Request::OK;
+    a.execution_profile = q.execution_profile;
+    a.command_semantics = q.command_semantics;
+    a.gain_profile = q.gain_profile;
     a.detail = "Accepted for a future frame boundary";
     journal_.record(q, a);
     auto& s = statuses_[uuid_string(q.session_id) + uuid_string(q.request_id)];
@@ -151,6 +155,8 @@ class Node final : public rclcpp::Node {
     s.epoch = q.next_epoch;
     s.requested_model = q.target_model;
     s.gain_profile = q.gain_profile;
+    s.execution_profile = q.execution_profile;
+    s.command_semantics = q.command_semantics;
     s.accepted = true;
     s.state = Status::PREPARING;
     status_ = &s;
@@ -207,7 +213,9 @@ class Node final : public rclcpp::Node {
       return;
     }
     const auto& f = *latest_;
-    if (f.gain_profile != current_.gain_profile) {
+    if (f.gain_profile != current_.gain_profile ||
+        f.execution_profile != current_.execution_profile ||
+        f.command_semantics != current_.command_semantics) {
       fail("State gain profile differs from transaction");
       return;
     }
@@ -311,6 +319,8 @@ class Node final : public rclcpp::Node {
       cmd.source_state_seq = f.state_seq;
       cmd.model_id = producing;
       cmd.gain_profile = current_.gain_profile;
+      cmd.execution_profile = current_.execution_profile;
+      cmd.command_semantics = current_.command_semantics;
       cmd.validity = 1;
       cmd.valid_for.nanosec = 40000000;
       cmd.phase = phase;
@@ -325,7 +335,9 @@ class Node final : public rclcpp::Node {
         trace_ << "{\"state_seq\":" << f.state_seq << ",\"sdk_tick\":" << f.sdk_tick
                << ",\"epoch\":" << epoch_ << ",\"target_seq\":" << seq_
                << ",\"phase\":" << static_cast<int>(phase)
-               << ",\"model\":" << std::quoted(producing);
+               << ",\"model\":" << std::quoted(producing)
+               << ",\"execution_profile\":" << std::quoted(cmd.execution_profile)
+               << ",\"command_semantics\":" << static_cast<int>(cmd.command_semantics);
         const auto vector = [this](const char* name, const auto& values) {
           trace_ << ",\"" << name << "\":[";
           bool first = true;

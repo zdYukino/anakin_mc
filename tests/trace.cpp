@@ -19,6 +19,8 @@ int main(int argc, char** argv) {
       anakin::mc::Frame f;
       f.schema_version = anakin::schema_version;
       f.schema_id = anakin::schema_id;
+      f.execution_profile = anakin::strict_execution_profile;
+      f.command_semantics = anakin::mechanical_position;
       f.validity = 7;
       f.header.stamp.sec = static_cast<int32_t>(wall);
       f.header.stamp.nanosec =
@@ -53,10 +55,17 @@ int main(int argc, char** argv) {
     q.session_id = anakin::new_uuid();
     q.request_id = anakin::new_uuid();
     q.target_model = "asap_loco";
+    q.execution_profile = anakin::strict_execution_profile;
+    q.command_semantics = anakin::mechanical_position;
+    q.gain_profile = anakin::merged_gain_profile;
     anakin::mc::Switch::Response a;
     a.accepted = true;
     j.record(q, a);
     if (!j.find(q) || !(j.find(q)->request == q)) throw std::runtime_error("Retry lost");
+    q.execution_profile = anakin::equivalent_execution_profile;
+    q.command_semantics = anakin::pd_reference;
+    if (j.find(q)->request == q)
+      throw std::runtime_error("Semantic request conflict not distinguished");
     q.target_model = "asap_cr7";
     if (j.find(q)->request == q) throw std::runtime_error("Conflict not distinguished");
     std::cout << "Native trace frames=" << n << " model=" << argv[1]
