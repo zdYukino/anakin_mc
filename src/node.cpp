@@ -4,6 +4,8 @@
 #include <anakin_sdk/msg/control_target.hpp>
 #include <anakin_sdk/msg/inference_status.hpp>
 #include <chrono>
+#include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <map>
 #include <rclcpp/rclcpp.hpp>
@@ -16,6 +18,12 @@ class Node final : public rclcpp::Node {
   Node() : rclcpp::Node("anakin_mc") {
     if (get_parameter("use_sim_time").as_bool())
       throw std::runtime_error("No official /clock publisher verified; use_sim_time must be false");
+    const auto trace_path = declare_parameter<std::string>("trace_jsonl", "");
+    if (!trace_path.empty()) {
+      trace_.open(trace_path);
+      if (!trace_) throw std::runtime_error("Cannot open inference diagnostic trace");
+      trace_ << std::setprecision(17);
+    }
     const auto loco = declare_parameter<std::string>("loco_model", "");
     const auto mimic = declare_parameter<std::string>("mimic_model", "");
     policies_["asap_loco"] = std::make_unique<Policy>("asap_loco", loco);
@@ -45,6 +53,7 @@ class Node final : public rclcpp::Node {
   using Clock = std::chrono::steady_clock;
   Uuid instance_ = new_uuid();
   Journal journal_;
+  std::ofstream trace_;
   std::map<std::string, std::unique_ptr<Policy>> policies_;
   std::map<std::string, Status> statuses_;
   Frame::ConstSharedPtr latest_;
@@ -57,6 +66,8 @@ class Node final : public rclcpp::Node {
   Positions upper_ = loco_pose();
   Status* status_ = nullptr;
   TransitionTimeline timeline_;
+  StartupTimeline startup_;
+  bool startup_initialized_ = false;
   rclcpp::Publisher<Target>::SharedPtr pub_;
   rclcpp::Publisher<Status>::SharedPtr status_pub_;
   rclcpp::Subscription<Frame>::SharedPtr sub_;
@@ -95,7 +106,10 @@ class Node final : public rclcpp::Node {
       reject(Switch::Request::INVALID, "Invalid schema, UUID, profile or timeout");
       return;
     }
-    if (!policies_.count(q.target_model) || q.transition_profile != "g1_named_upper_v1") {
+    const bool startup_profile =
+        q.transition_profile == "g1_startup_v1" && q.target_model == "asap_loco";
+    if (!policies_.count(q.target_model) ||
+        (q.transition_profile != "g1_named_upper_v1" && !startup_profile)) {
       reject(Switch::Request::UNSUPPORTED, "Unsupported model or transition profile");
       return;
     }
@@ -114,6 +128,9 @@ class Node final : public rclcpp::Node {
       upper_ = loco_pose();
       last_state_seq_ = 0;
     }
+    if (startup_profile)
+      active_.clear();  // explicit new stand authorization never continues an old model
+    startup_initialized_ = false;
     current_ = q;
     session_ = q.session_id;
     epoch_ = q.next_epoch;
@@ -226,10 +243,24 @@ class Node final : public rclcpp::Node {
       auto& producing_policy = *policies_.at(producing);
       const bool report_motion_done = producing_policy.motion_done();
       auto result = producing_policy.infer(f, upper_);
+      const Positions policy_q_ref = result.q_ref;
       if (producing == "asap_loco")
         for (auto i : upper_override_indices()) result.q_ref[i] = upper_[i];
+      const Positions mux_goal = result.q_ref;
+      const bool startup_profile = current_.transition_profile == "g1_startup_v1";
+      if (startup_profile) {
+        if (!startup_initialized_) {
+          Positions measured{};
+          const auto map = named_indices(f.joints.name);
+          for (size_t i = 0; i < 29; ++i) measured[map[i]] = f.joints.position[i];
+          startup_.begin(measured);
+          startup_initialized_ = true;
+        }
+        result.q_ref = startup_.apply(result.q_ref);
+      }
       auto post_step = [&] {
         producing_policy.post_step();
+        if (startup_profile) startup_.post_step();
         if (switching && !use_target) {
           Positions warmup_reference = entering_mimic ? upper_ : Positions{};
           target.observe(f, warmup_reference);
@@ -257,7 +288,8 @@ class Node final : public rclcpp::Node {
         return;
       }
       const uint8_t phase =
-          !switching || timeline_.complete()
+          startup_profile && !startup_.complete() ? Target::TRANSITION_ENTRY
+          : !switching || timeline_.complete()
               ? Target::TARGET_ACTIVE
               : (frame_count_ == 0 ? Target::SOURCE_CONTINUATION : Target::TRANSITION_ENTRY);
       if (Clock::now() > planned_deadline) {
@@ -286,6 +318,30 @@ class Node final : public rclcpp::Node {
       cmd.target.points.push_back(point);
       pub_->publish(cmd);  // Completion below confirms publication only.
       post_step();
+      if (trace_) {
+        trace_ << "{\"state_seq\":" << f.state_seq << ",\"sdk_tick\":" << f.sdk_tick
+               << ",\"epoch\":" << epoch_ << ",\"target_seq\":" << seq_
+               << ",\"phase\":" << static_cast<int>(phase)
+               << ",\"model\":" << std::quoted(producing);
+        const auto vector = [this](const char* name, const auto& values) {
+          trace_ << ",\"" << name << "\":[";
+          bool first = true;
+          for (auto value : values) {
+            if (!first) trace_ << ',';
+            first = false;
+            trace_ << value;
+          }
+          trace_ << ']';
+        };
+        vector("observation", result.observation);
+        vector("raw_action", result.raw_action);
+        vector("policy_q_ref", policy_q_ref);
+        vector("mux_goal", mux_goal);
+        vector("published_q_ref", result.q_ref);
+        vector("measured_q", f.joints.position);
+        vector("measured_dq", f.joints.velocity);
+        trace_ << "}\n";
+      }
       const size_t p = phase == Target::SOURCE_CONTINUATION ? 0
                        : phase == Target::TRANSITION_ENTRY  ? 1
                                                             : 2;
@@ -308,6 +364,16 @@ class Node final : public rclcpp::Node {
           if ((f.phase_mask_seen & bit) && status_->phase_first_seq[k] &&
               f.target_seq_seen >= status_->phase_first_seq[k])
             status_->env_seen_phase_mask |= bit;
+        }
+      }
+      if (f.sdk_published_mc_instance_id == instance_ &&
+          f.sdk_published_request_id == current_.request_id && f.sdk_published_epoch == epoch_ &&
+          f.sdk_published_target_seq <= seq_) {
+        for (size_t k = 0; k < 3; ++k) {
+          const uint8_t bit = 1u << k;
+          if ((f.sdk_published_phase_mask & bit) && status_->phase_first_seq[k] &&
+              f.sdk_published_target_seq >= status_->phase_first_seq[k])
+            status_->env_sdk_published_phase_mask |= bit;
         }
       }
       if (phase == Target::TARGET_ACTIVE) {

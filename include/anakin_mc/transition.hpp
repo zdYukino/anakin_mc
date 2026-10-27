@@ -32,4 +32,27 @@ class TransitionTimeline {
   uint64_t count_ = 0;
   Positions upper_{}, target_{}, start_{};
 };
+// Explicit g1_startup_v1: ten model warmup observations precede this
+// ten-callback canonical-position ramp. It never blends heterogeneous actions.
+class StartupTimeline {
+ public:
+  void begin(const Positions& measured) {
+    source_ = measured;
+    count_ = 0;
+  }
+  Positions apply(const Positions& target) const {
+    const double alpha = std::min(1., static_cast<double>(count_) / 10.);
+    Positions command{};
+    for (size_t i = 0; i < 29; ++i) command[i] = (1 - alpha) * source_[i] + alpha * target[i];
+    return command;
+  }
+  void post_step() {
+    if (count_ < 10) ++count_;
+  }
+  bool complete() const { return count_ >= 10; }
+
+ private:
+  Positions source_{};
+  uint64_t count_ = 0;
+};
 }  // namespace anakin::mc
