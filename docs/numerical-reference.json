@@ -1,0 +1,49 @@
+{
+  "python_ort": "1.31.0",
+  "results": {
+    "asap_loco": {
+      "frames": 48,
+      "model_path": "/home/zdyukino/workspace/Anakin/assets/models/g1/asap/dec_loco/20250109_231507-noDR_rand_history_loco_stand_height_noise-decoupled_locomotion-g1_29dof/model_6600.onnx",
+      "model_sha256": "188aea28fac59adc561b6c5effabc8add608aab3955368755e322831de9af652",
+      "comparisons": {
+        "observation_and_grouped_history": {
+          "max_abs": 7.152557373046875e-07,
+          "tolerance": 3e-06,
+          "pass": true
+        },
+        "raw_action": {
+          "max_abs": 7.152557373046875e-07,
+          "tolerance": 5e-05,
+          "pass": true
+        },
+        "canonical_q_ref": {
+          "max_abs": 1.7881393432617188e-07,
+          "tolerance": 1.3e-05,
+          "pass": true
+        }
+      }
+    },
+    "asap_cr7": {
+      "frames": 48,
+      "model_path": "/home/zdyukino/workspace/Anakin/assets/models/g1/asap/mimic/CR7_level1/model_191500.onnx",
+      "model_sha256": "100b853d5f66a0bf53c03d2bea1064430b52723d2a1bdd5ba19748c60497a67e",
+      "comparisons": {
+        "observation_and_grouped_history": {
+          "max_abs": 1.7881393432617188e-06,
+          "tolerance": 3e-06,
+          "pass": true
+        },
+        "raw_action": {
+          "max_abs": 1.7881393432617188e-06,
+          "tolerance": 5e-05,
+          "pass": true
+        },
+        "canonical_q_ref": {
+          "max_abs": 4.470348358154297e-07,
+          "tolerance": 1.3e-05,
+          "pass": true
+        }
+      }
+    }
+  }
+}

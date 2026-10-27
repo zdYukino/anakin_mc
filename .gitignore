@@ -1,0 +1,5 @@
+build/
+install/
+log/
+*.csv
+__pycache__/

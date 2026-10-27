@@ -1,0 +1,59 @@
+{
+  "python_ort": "1.31.0",
+  "results": {
+    "asap_loco": {
+      "frames": 224,
+      "model_path": "/home/zdyukino/workspace/Anakin/assets/models/g1/asap/dec_loco/20250109_231507-noDR_rand_history_loco_stand_height_noise-decoupled_locomotion-g1_29dof/model_6600.onnx",
+      "model_sha256": "188aea28fac59adc561b6c5effabc8add608aab3955368755e322831de9af652",
+      "comparisons": {
+        "observation_and_grouped_history": {
+          "max_abs": 1.430511474609375e-06,
+          "tolerance": 3e-06,
+          "pass": true
+        },
+        "raw_action": {
+          "max_abs": 1.430511474609375e-06,
+          "tolerance": 5e-05,
+          "pass": true
+        },
+        "canonical_q_ref": {
+          "max_abs": 3.5762786865234375e-07,
+          "tolerance": 1.3e-05,
+          "pass": true
+        },
+        "motion_done_before_callback": {
+          "max_abs": 0.0,
+          "tolerance": 0,
+          "pass": true
+        }
+      }
+    },
+    "asap_cr7": {
+      "frames": 224,
+      "model_path": "/home/zdyukino/workspace/Anakin/assets/models/g1/asap/mimic/CR7_level1/model_191500.onnx",
+      "model_sha256": "100b853d5f66a0bf53c03d2bea1064430b52723d2a1bdd5ba19748c60497a67e",
+      "comparisons": {
+        "observation_and_grouped_history": {
+          "max_abs": 7.62939453125e-06,
+          "tolerance": 3e-06,
+          "pass": false
+        },
+        "raw_action": {
+          "max_abs": 7.62939453125e-06,
+          "tolerance": 5e-05,
+          "pass": true
+        },
+        "canonical_q_ref": {
+          "max_abs": 1.9073486328125e-06,
+          "tolerance": 1.3e-05,
+          "pass": true
+        },
+        "motion_done_before_callback": {
+          "max_abs": 0.0,
+          "tolerance": 0,
+          "pass": true
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "url": "https://api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime/1.20.1/microsoft.ml.onnxruntime.1.20.1.nupkg",
+  "version": "1.20.1",
+  "source_commit": "5c1b7ccbff7e5141c1da7a9d963d660e5741c319",
+  "archive_sha256": "9c32108e9a1c78b090a95c2a219f244dd5f067d4caf68fb0f967103f3f20839c",
+  "extraction": "Only official native Linux x64 libraries and C/C++ headers, no managed/Python runtime."
+}

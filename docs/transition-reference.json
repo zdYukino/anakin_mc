@@ -1,0 +1,16 @@
+{
+  "enter": {
+    "frames": 112,
+    "max_abs": 0.0,
+    "pass": true,
+    "first_target_frame": 101,
+    "completed_frame": 101
+  },
+  "return": {
+    "frames": 112,
+    "max_abs": 0.0,
+    "pass": true,
+    "first_target_frame": 25,
+    "completed_frame": 101
+  }
+}
