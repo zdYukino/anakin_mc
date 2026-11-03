@@ -1,6 +1,6 @@
 # anakin_mc
 
-原生 C++ ONNX 模型控制模块，独立 ROS 2 Humble ament 包。MC 保留原模型、历史、动作缩放与过渡计算，只通过 `anakin_sdk` 发布最终控制目标；低层写入和实机权限由独立 Env 管理。
+原生 C++ ONNX 模型控制模块，独立 ROS 2 Humble ament 包。MC 保留原模型和动作缩放，只通过 `anakin_sdk` 发布最终控制目标；低层写入和实机权限由独立 Env 管理。
 
 先安装 [anakin_sdk.revision](anakin_sdk.revision) 锁定的 SDK，再构建：
 
@@ -19,6 +19,10 @@ MC 与 Env、官方模拟器分别启动，长期等待新数据；没有固定�
 启动器只使用本仓库 `install/anakin_mc`；`ANAKIN_PREFIX` 显式选择当前 MC 前缀，`ANAKIN_SDK_PREFIX` 指定 SDK。启动前检查实际 ELF、本地包标记、SDK 构建记录、ORT 与模型。ROS 日志默认进入本仓 `log/ros/`。单仓入口只启动 MC；[AnakinC](https://github.com/zdYukino/AnakinC) 提供 ENV + MC 联合启动，并根据 ENV 配置自动同步 ROS domain。
 
 对缺失、过期、重复或不允许推理的状态帧，MC 保留模型/历史/时间线并等待，不发布旧目标。Env 的 Preparing 可允许当前事务预热；这不是电机授权。真实 SDK 写入及其实机新鲜度/停止期限仍由 Env 管理。详见 [SDK 合同](../anakin_sdk/docs/contract.md)。
+
+MC 策略之间使用 `g1_direct_v1`：收到有效服务请求后，在下一个允许推理的新状态帧直接输出目标策略及其增益，不再等待固定帧数或混合策略输出。Loco 的 12 个策略关节使用模型输出，另外 17 个关节使用 G1 基础 PD 和与 Env Hold 相同的站姿目标；模型观测及后台预热也使用该站姿参考。其他策略未控制的关节继续保持切换帧的实测姿态。其余策略各自持续收集近期观测，上一动作保持各自状态；没有可用历史时按目标策略的初始状态立即推理，不等预热。旧 `g1_named_upper_v1` 和 `g1_quick_return_v1` 请求兼容为直接切换；从 Hold 启动 Loco 的 `g1_startup_v1` 仍执行原有启动对齐。
+
+直接切换可能出现关节目标和增益跳变；保持关节参考也不保证机器人在世界坐标中零位移。此前一次无支撑仿真中，尝试加速进入 CR7 后该策略在动作完成前产生非有限输出并触发故障。本版通用直接切换尚未经过完整闭环动作验收，应先在仿真中验证。
 
 通信无关的软件检查：
 

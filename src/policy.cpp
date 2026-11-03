@@ -64,6 +64,8 @@ Policy::Policy(std::string id, const std::string& path) : id_(std::move(id)) {
     std::iota(indices_.begin(), indices_.end(), 0);
   } else
     indices_ = mimic_indices();
+  for (size_t k = 0; k < static_cast<size_t>(act); ++k)
+    controlled_[id_ == "asap_loco" ? k : indices_[k]] = true;
   reset();
 }
 void Policy::reset() {
@@ -168,6 +170,13 @@ Result Policy::infer(const Frame& f, const Positions& ref) {
     r.q_ref[j] = defaults()[j] + .25f * clipped;
   }
   return r;
+}
+Positions Policy::uncontrolled_reference(const Positions& measured) const {
+  return id_ == "asap_loco" ? loco_pose() : measured;
+}
+void Policy::apply_uncontrolled_reference(Positions& command, const Positions& reference) const {
+  for (size_t i = 0; i < command.size(); ++i)
+    if (!controlled_[i]) command[i] = reference[i];
 }
 void Policy::post_step() {
   if (id_ == "asap_cr7" && steps_ * .02 / 3.967 >= 1.) {

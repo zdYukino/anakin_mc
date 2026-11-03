@@ -61,14 +61,22 @@ class Node final : public rclcpp::Node {
   Clock::time_point received_{}, next_tick_{};
   Switch::Request current_{};
   bool pending_ = false, started_ = false;
-  std::string active_, source_;
+  std::string active_;
   uint64_t seq_ = 0, last_state_seq_ = 0, frame_count_ = 0, epoch_ = 0;
   Uuid session_{};
-  Positions upper_ = loco_pose();
+  Positions held_ = loco_pose();
   Status* status_ = nullptr;
-  TransitionTimeline timeline_;
   StartupTimeline startup_;
   bool startup_initialized_ = false;
+  struct WarmHistory {
+    Uuid session{};
+    uint64_t source_epoch = 0, samples = 0;
+    Clock::time_point at{};
+  };
+  std::map<std::string, WarmHistory> warm_;
+  Uuid active_session_{};
+  uint64_t active_epoch_ = 0;
+  Clock::time_point active_at_{};
   rclcpp::Publisher<Target>::SharedPtr pub_;
   rclcpp::Publisher<Status>::SharedPtr status_pub_;
   rclcpp::Subscription<Frame>::SharedPtr sub_;
@@ -110,7 +118,9 @@ class Node final : public rclcpp::Node {
     const bool startup_profile =
         q.transition_profile == "g1_startup_v1" && q.target_model == "asap_loco";
     if (!policies_.count(q.target_model) ||
-        (q.transition_profile != "g1_named_upper_v1" && !startup_profile)) {
+        (q.transition_profile != "g1_direct_v1" && q.transition_profile != "g1_named_upper_v1" &&
+         !(q.transition_profile == "g1_quick_return_v1" && q.target_model == "asap_loco") &&
+         !startup_profile)) {
       reject(Switch::Request::UNSUPPORTED, "Unsupported model or transition profile");
       return;
     }
@@ -125,9 +135,8 @@ class Node final : public rclcpp::Node {
     }
     if (q.session_id != session_) {
       active_.clear();
-      source_.clear();
-      upper_ = loco_pose();
       last_state_seq_ = 0;
+      warm_.clear();
     }
     if (startup_profile)
       active_.clear();  // explicit new stand authorization never continues an old model
@@ -200,89 +209,85 @@ class Node final : public rclcpp::Node {
         [this, planned_deadline](const Frame& frame) { infer_frame(frame, planned_deadline); });
     if (decision == FrameDecision::ContractMismatch) fail("State execution contract differs from transaction");
   }
+  Positions measured_pose(const Frame& f) const {
+    if (f.joints.name.size() != 29 || f.joints.position.size() != 29)
+      throw std::runtime_error("Measured pose unavailable");
+    Positions measured{};
+    const auto map = named_indices(f.joints.name);
+    for (size_t i = 0; i < 29; ++i) measured[map[i]] = f.joints.position[i];
+    return measured;
+  }
+  void prewarm_inactive(const Frame& f, const Positions& reference) {
+    const auto t = Clock::now();
+    for (auto& [id, policy] : policies_) {
+      if (id == current_.target_model) continue;
+      auto& history = warm_[id];
+      try {
+        if (history.session != session_ || history.source_epoch != epoch_ ||
+            history.at == Clock::time_point{} || t - history.at > 80ms) {
+          policy->reset();
+          history = {};
+          history.session = session_;
+          history.source_epoch = epoch_;
+        }
+        // Observe only. The inactive policy's previous action remains its own
+        // reset state; no source-model output is injected as a target action.
+        policy->observe(f, policy->uncontrolled_reference(reference));
+        history.at = t;
+        ++history.samples;
+      } catch (const std::exception& error) {
+        history = {};
+        RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000,
+                             "Inactive policy %s prewarm failed: %s", id.c_str(), error.what());
+      }
+    }
+  }
   void infer_frame(const Frame& f, Clock::time_point planned_deadline) {
     try {
+      const bool startup_profile = current_.transition_profile == "g1_startup_v1";
       if (!started_) {
-        source_ = active_;
-        policies_.at(current_.target_model)->reset();
         frame_count_ = 0;
-        if (f.joints.name.size() != 29 || f.joints.position.size() != 29)
-          throw std::runtime_error("Initial measured pose unavailable");
-        (void)named_indices(f.joints.name);
-        if (!source_.empty() && source_ != current_.target_model)
-          timeline_.begin(current_.target_model == "asap_cr7", upper_,
-                          current_.target_model == "asap_cr7" ? mimic_init() : loco_pose());
+        held_ = measured_pose(f);
+        const auto t = Clock::now();
+        const bool fresh_active = !active_.empty() && active_session_ == session_ && active_at_ != Clock::time_point{} &&
+                                  t - active_at_ <= 80ms;
+        const auto warm = warm_.find(current_.target_model);
+        const bool prewarmed = fresh_active && warm != warm_.end() && warm->second.session == session_ &&
+            warm->second.source_epoch == active_epoch_ && warm->second.samples > 0 &&
+            warm->second.at != Clock::time_point{} && t - warm->second.at <= 80ms;
+        const bool continuing = fresh_active && active_ == current_.target_model;
+        if (startup_profile || (!prewarmed && !continuing)) policies_.at(current_.target_model)->reset();
         started_ = true;
       }
       auto& target = *policies_.at(current_.target_model);
-      const bool switching = !source_.empty() && source_ != current_.target_model;
-      const bool entering_mimic = switching && current_.target_model == "asap_cr7";
-      if (switching)
-        upper_ = timeline_.upper();
-      else
-        upper_ = loco_pose();
-      status_->target_ready = switching ? timeline_.target_ready() : frame_count_ >= 10;
-      if (!switching && frame_count_ < 10) {
-        target.observe(f, upper_);
+      const Positions reference = target.uncontrolled_reference(held_);
+      status_->target_ready = !startup_profile || frame_count_ >= 10;
+      if (startup_profile && frame_count_ < 10) {
+        target.observe(f, reference);
         ++frame_count_;
         status_->source_state_seq = f.state_seq;
         status_pub_->publish(*status_);
         return;
       }
-      const bool use_target = !switching || timeline_.target_controls();
-      const std::string producing = use_target ? current_.target_model : source_;
-      auto& producing_policy = *policies_.at(producing);
-      const bool report_motion_done = producing_policy.motion_done();
-      auto result = producing_policy.infer(f, upper_);
+      const std::string& producing = current_.target_model;
+      const bool report_motion_done = target.motion_done();
+      auto result = target.infer(f, reference);
       const Positions policy_q_ref = result.q_ref;
-      if (producing == "asap_loco")
-        for (auto i : upper_override_indices()) result.q_ref[i] = upper_[i];
+      if (startup_profile) {
+        for (auto i : upper_override_indices()) result.q_ref[i] = reference[i];
+      } else {
+        target.apply_uncontrolled_reference(result.q_ref, reference);
+      }
       const Positions mux_goal = result.q_ref;
-      const bool startup_profile = current_.transition_profile == "g1_startup_v1";
       if (startup_profile) {
         if (!startup_initialized_) {
-          Positions measured{};
-          const auto map = named_indices(f.joints.name);
-          for (size_t i = 0; i < 29; ++i) measured[map[i]] = f.joints.position[i];
-          startup_.begin(measured);
+          startup_.begin(measured_pose(f));
           startup_initialized_ = true;
         }
         result.q_ref = startup_.apply(result.q_ref);
       }
-      auto post_step = [&] {
-        producing_policy.post_step();
-        if (startup_profile) startup_.post_step();
-        if (switching && !use_target) {
-          Positions warmup_reference = entering_mimic ? upper_ : Positions{};
-          target.observe(f, warmup_reference);
-        }
-        if (switching) {
-          Positions measured{};
-          auto map = named_indices(f.joints.name);
-          for (size_t i = 0; i < 29; ++i) measured[map[i]] = f.joints.position[i];
-          timeline_.post_step(measured);
-        }
-        ++frame_count_;
-      };
-      // A source mimic has no continuation permission in this profile. Warm it and
-      // the target independently while env locally stops during the bounded wait.
-      const bool may_emit =
-          use_target || (current_.allow_source_continuation && source_ == "asap_loco");
-      if (!may_emit) {
-        post_step();
-        status_->state = Status::PREPARING;
-        status_->source_state_seq = f.state_seq;
-        status_->source_continuation = false;
-        status_->transition_entry = false;
-        status_->target_active = false;
-        status_pub_->publish(*status_);
-        return;
-      }
-      const uint8_t phase =
-          startup_profile && !startup_.complete() ? Target::TRANSITION_ENTRY
-          : !switching || timeline_.complete()
-              ? Target::TARGET_ACTIVE
-              : (frame_count_ == 0 ? Target::SOURCE_CONTINUATION : Target::TRANSITION_ENTRY);
+      const uint8_t phase = startup_profile && !startup_.complete()
+                                ? Target::TRANSITION_ENTRY : Target::TARGET_ACTIVE;
       if (Clock::now() > planned_deadline) {
         fail("Planned inference deadline missed");
         return;
@@ -310,10 +315,16 @@ class Node final : public rclcpp::Node {
       point.positions.assign(result.q_ref.begin(), result.q_ref.end());
       cmd.target.points.push_back(point);
       pub_->publish(cmd);  // Completion below confirms publication only.
-      post_step();
+      target.post_step();
+      if (startup_profile) startup_.post_step();
+      ++frame_count_;
       if (trace_) {
         trace_ << "{\"state_seq\":" << f.state_seq << ",\"sdk_tick\":" << f.sdk_tick
                << ",\"epoch\":" << epoch_ << ",\"target_seq\":" << seq_
+               << ",\"steady_ns\":" << std::chrono::duration_cast<std::chrono::nanoseconds>(
+                      Clock::now().time_since_epoch()).count()
+               << ",\"state_stamp_ns\":" <<
+                      (static_cast<int64_t>(f.header.stamp.sec) * 1000000000LL + f.header.stamp.nanosec)
                << ",\"phase\":" << static_cast<int>(phase)
                << ",\"model\":" << std::quoted(producing)
                << ",\"execution_profile\":" << std::quoted(cmd.execution_profile)
@@ -335,6 +346,18 @@ class Node final : public rclcpp::Node {
         vector("published_q_ref", result.q_ref);
         vector("measured_q", f.joints.position);
         vector("measured_dq", f.joints.velocity);
+        vector("imu_quaternion_xyzw", std::array<double, 4>{f.imu.orientation.x, f.imu.orientation.y,
+                                                            f.imu.orientation.z, f.imu.orientation.w});
+        vector("imu_angular_velocity", std::array<double, 3>{f.imu.angular_velocity.x,
+                                                            f.imu.angular_velocity.y,
+                                                            f.imu.angular_velocity.z});
+        vector("command", std::array<double, 5>{f.command.twist.linear.x, f.command.twist.linear.y,
+                                               f.command.twist.angular.z, f.command_base_height,
+                                               f.command_stand ? 1. : 0.});
+        if (f.validity & Frame::VALID_ODOMETRY)
+          vector("base_position", std::array<double, 3>{f.odometry.pose.pose.position.x,
+                                                        f.odometry.pose.pose.position.y,
+                                                        f.odometry.pose.pose.position.z});
         trace_ << "}\n";
       }
       const size_t p = phase == Target::SOURCE_CONTINUATION ? 0
@@ -374,9 +397,13 @@ class Node final : public rclcpp::Node {
       if (phase == Target::TARGET_ACTIVE) {
         pending_ = false;
         active_ = current_.target_model;
+        active_session_ = session_;
+        active_epoch_ = epoch_;
+        active_at_ = Clock::now();
       }
       status_->header.stamp = now();
       status_pub_->publish(*status_);
+      prewarm_inactive(f, measured_pose(f));
     } catch (const std::exception& e) {
       fail(e.what());
     }

@@ -48,6 +48,13 @@ if(BUILD_TESTING)
  set_tests_properties(inference_wait_contracts PROPERTIES LABELS "offline;runtime;waiting")
  add_test(NAME startup_mux_contracts COMMAND anakin_mc_startup_test)
  set_tests_properties(startup_mux_contracts PROPERTIES LABELS "offline;runtime;startup")
+ add_executable(anakin_mc_policy_handover_test tests/policy_handover.cpp)
+ target_link_libraries(anakin_mc_policy_handover_test anakin_policy)
+ ament_target_dependencies(anakin_mc_policy_handover_test anakin_sdk)
+ add_test(NAME direct_policy_handover_contracts COMMAND anakin_mc_policy_handover_test
+   "${CMAKE_CURRENT_SOURCE_DIR}/assets/models/g1/asap/dec_loco/20250109_231507-noDR_rand_history_loco_stand_height_noise-decoupled_locomotion-g1_29dof/model_6600.onnx"
+   "${CMAKE_CURRENT_SOURCE_DIR}/assets/models/g1/asap/mimic/CR7_level1/model_191500.onnx")
+ set_tests_properties(direct_policy_handover_contracts PROPERTIES LABELS "offline;runtime;transition")
 endif()
 install(TARGETS anakin_mc_node anakin_mc_trace anakin_mc_transition_trace DESTINATION lib/${PROJECT_NAME})
 install(DIRECTORY docs/ DESTINATION share/${PROJECT_NAME}/docs)

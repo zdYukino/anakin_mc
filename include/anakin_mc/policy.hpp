@@ -26,6 +26,10 @@ class Policy {
   void reset();
   std::vector<float> observe(const Frame& frame, const Positions& upper_reference);
   Result infer(const Frame& frame, const Positions& upper_reference);
+  // Each policy chooses the reference used both by its observations and by
+  // the PD targets for joints outside its action space.
+  Positions uncontrolled_reference(const Positions& measured) const;
+  void apply_uncontrolled_reference(Positions& command, const Positions& reference) const;
   void post_step();
   bool motion_done() const;
   const std::string& id() const { return id_; }
@@ -41,5 +45,6 @@ class Policy {
   uint64_t steps_ = 0;
   bool motion_done_ = false;
   std::vector<size_t> indices_;
+  std::array<bool, 29> controlled_{};
 };
 }  // namespace anakin::mc
