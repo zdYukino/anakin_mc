@@ -6,12 +6,12 @@
 
 ```sh
 ANAKIN_SDK_PREFIX=/path/to/sdk/install/anakin_sdk ./build.sh
-./en_run.sh
+./em_run.sh
 ```
 
 也可把 SDK / MC / Env 三个独立仓库链接到 `../anakin_cpp_ws/src` 后运行工作区 `build.sh`。MC 需要官方原生 ONNX Runtime 1.20.1；`ONNXRUNTIME_ROOT` 可指定其目录。默认采用相邻工作区的 SDK、ORT 和原有 ONNX 模型；`ANAKIN_LOCO_MODEL`、`ANAKIN_MIMIC_MODEL` 可明确指定模型文件。
 
-MC 与 Env、官方模拟器分别启动，长期等待新数据；没有固定时长退出，也不会启动/重置模拟器。MC 的实际入口是本仓库 `en_run.sh`，没有工作区 `mc_run.sh`。完整三终端操作、模式/键位、YAML、实机显式网卡和用户验收说明见 [Env 独立运行说明](../anakin_env/docs/standalone-operation.md)。默认 ROS domain 87，发现限制本机；自定义 Env `transport.ros_domain` 后需在 MC 启动前设置相同 `ROS_DOMAIN_ID`。
+MC 与 Env、官方模拟器分别启动，长期等待新数据；没有固定时长退出，也不会启动/重置模拟器。MC 的实际入口是本仓库 `em_run.sh`，没有工作区 `mc_run.sh`。完整三终端操作、模式/键位、YAML、实机显式网卡和用户验收说明见 [Env 独立运行说明](../anakin_env/docs/standalone-operation.md)。默认 ROS domain 87，发现限制本机；自定义 Env `transport.ros_domain` 后需在 MC 启动前设置相同 `ROS_DOMAIN_ID`。
 
 启动器优先本仓库 `install/anakin_mc`，不存在时选择共享工作区安装；`ANAKIN_PREFIX` 显式选择当前 MC 前缀，`ANAKIN_SDK_PREFIX` 指定 SDK。存在但不完整的独立安装会报错，不回退其他 overlay。启动前检查实际 ELF、本地包标记和 SDK 构建记录；只执行 C++ ELF，不构建、不安装依赖、不运行 Python 启动脚本。
 
