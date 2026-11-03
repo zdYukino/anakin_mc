@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
-repo=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-ws=${ANAKIN_WS:-"$repo/../anakin_cpp_ws"}
-ws=$(cd -- "$ws" && pwd)
-sdk_prefix=${ANAKIN_SDK_PREFIX:-"$ws/install/anakin_sdk"}
-if [[ -d "$repo/install/anakin_mc" ]]; then default_prefix="$repo/install/anakin_mc"; else default_prefix="$ws/install/anakin_mc"; fi
-prefix=${ANAKIN_PREFIX:-"$default_prefix"}
+repo=$(cd -- "$(dirname -- "$(realpath -- "${BASH_SOURCE[0]}")")" && pwd)
+if [[ ${1:-} == --help || ${1:-} == -h ]]; then
+ echo 'Usage: ./em_run.sh [ROS argument tokens, e.g. -p name:=value]'
+ echo 'Starts MC only. Models default to the selected install; SDK defaults to ../anakin_sdk/install/anakin_sdk.'
+ exit 0
+fi
+sdk_prefix=${ANAKIN_SDK_PREFIX:-"$repo/../anakin_sdk/install/anakin_sdk"}
+prefix=${ANAKIN_PREFIX:-"$repo/install/anakin_mc"}
 fail() { echo "anakin_mc: $*" >&2; exit 2; }
 read_revision() {
  local path=$1
@@ -43,12 +45,17 @@ export ANAKIN_PREFIX="$prefix" ANAKIN_SDK_PREFIX="$sdk_prefix"
 export ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-87}
 export ROS_LOCALHOST_ONLY=1
 export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
-export AMENT_PREFIX_PATH="$sdk_prefix:$prefix:/opt/ros/humble${AMENT_PREFIX_PATH:+:$AMENT_PREFIX_PATH}"
-export LD_LIBRARY_PATH="$sdk_prefix/lib:$prefix/lib:/opt/ros/humble/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-ort=${ONNXRUNTIME_ROOT:-"$ws/deps/onnxruntime-linux-x64-1.20.1"}
-assets=${ANAKIN_ASSETS:-"$repo/../Anakin/assets"}
+ros_prefix=${ROS_PREFIX:-/opt/ros/${ROS_DISTRO:-humble}}
+export AMENT_PREFIX_PATH="$sdk_prefix:$prefix:$ros_prefix${AMENT_PREFIX_PATH:+:$AMENT_PREFIX_PATH}"
+export LD_LIBRARY_PATH="$sdk_prefix/lib:$prefix/lib:$ros_prefix/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+ort=${ONNXRUNTIME_ROOT:-"$repo/.deps/onnxruntime-linux-x64-1.20.1"}
+assets=${ANAKIN_ASSETS:-"$prefix/share/anakin_mc/assets"}
 loco=${ANAKIN_LOCO_MODEL:-"$assets/models/g1/asap/dec_loco/20250109_231507-noDR_rand_history_loco_stand_height_noise-decoupled_locomotion-g1_29dof/model_6600.onnx"}
 mimic=${ANAKIN_MIMIC_MODEL:-"$assets/models/g1/asap/mimic/CR7_level1/model_191500.onnx"}
 [[ -f "$loco" && -f "$mimic" ]] || { echo 'Pinned model paths unavailable; set ANAKIN_LOCO_MODEL and ANAKIN_MIMIC_MODEL' >&2; exit 2; }
+[[ -f "$ort/lib/libonnxruntime.so.1" && -r "$ort/VERSION_NUMBER" && $(< "$ort/VERSION_NUMBER") == 1.20.1 ]] || fail 'Missing ONNX Runtime 1.20.1; run scripts/setup_ort.py or set ONNXRUNTIME_ROOT'
 export LD_LIBRARY_PATH="$ort/lib:$LD_LIBRARY_PATH"
+export ROS_LOG_DIR=${ROS_LOG_DIR:-"$repo/log/ros"}
+if [[ ${ANAKIN_LAUNCH_CHECK_ONLY:-0} == 1 ]]; then exit 0; fi
+mkdir -p -- "$ROS_LOG_DIR"
 exec "$binary" --ros-args -p "loco_model:=$loco" -p "mimic_model:=$mimic" "$@"
