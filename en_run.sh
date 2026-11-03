@@ -6,15 +6,40 @@ ws=$(cd -- "$ws" && pwd)
 sdk_prefix=${ANAKIN_SDK_PREFIX:-"$ws/install/anakin_sdk"}
 if [[ -d "$repo/install/anakin_mc" ]]; then default_prefix="$repo/install/anakin_mc"; else default_prefix="$ws/install/anakin_mc"; fi
 prefix=${ANAKIN_PREFIX:-"$default_prefix"}
-read -r sdk_revision < "$repo/anakin_sdk.revision"
-grep -Fq -- "$sdk_revision" "$sdk_prefix/share/anakin_sdk/cmake/revision.cmake" || { echo 'SDK revision mismatch' >&2; exit 2; }
+fail() { echo "anakin_mc: $*" >&2; exit 2; }
+read_revision() {
+ local path=$1
+ local -a lines=()
+ [[ -r "$path" ]] || fail "Missing SDK provenance: $path"
+ mapfile -t lines < "$path"
+ [[ ${#lines[@]} == 1 && ${lines[0]} =~ ^[0-9a-f]{40}$ ]] || fail "Invalid SDK provenance: $path"
+ revision_value=${lines[0]}
+}
+prefix=$(realpath -e -- "$prefix") || fail "Missing selected MC prefix: $prefix"
+sdk_prefix=$(realpath -e -- "$sdk_prefix") || fail "Missing selected SDK prefix: $sdk_prefix"
+[[ -f "$prefix/share/ament_index/resource_index/packages/anakin_mc" ]] || fail 'Selected MC prefix has no local package marker'
+[[ -f "$sdk_prefix/share/ament_index/resource_index/packages/anakin_sdk" ]] || fail 'Selected SDK prefix has no local package marker'
 binary="$prefix/lib/anakin_mc/anakin_mc_node"
-[[ -x "$binary" ]] || { echo "Missing C++ binary: $binary" >&2; exit 2; }
-
-built_lock="$prefix/share/anakin_mc/runtime-sdk.revision"
-[[ -f "$built_lock" ]] || { echo 'Binary SDK build provenance is missing; rebuild this prefix' >&2; exit 2; }
-read -r built_revision < "$built_lock"
-[[ "$built_revision" == "$sdk_revision" ]] || { echo 'Binary was built against another SDK revision; rebuild this prefix' >&2; exit 2; }
+[[ -f "$binary" && -x "$binary" ]] || fail "Missing C++ binary: $binary"
+[[ $(realpath -e -- "$binary") == "$binary" ]] || fail 'Selected ELF escapes its install prefix'
+[[ $(od -An -tx1 -N4 -- "$binary" | tr -d ' \n') == 7f454c46 ]] || fail 'Selected executable is not an ELF'
+read_revision "$repo/anakin_sdk.revision"
+sdk_revision=$revision_value
+read_revision "$prefix/share/anakin_mc/runtime-sdk.revision"
+[[ "$revision_value" == "$sdk_revision" ]] || fail 'Binary was built against another SDK revision; rebuild this prefix'
+metadata="$sdk_prefix/share/anakin_sdk/cmake/revision.cmake"
+[[ -r "$metadata" ]] || fail "Missing installed SDK provenance: $metadata"
+installed_revision=''
+revision_pattern='^set\(ANAKIN_SDK_REVISION "([0-9a-f]{40})"\)$'
+ignored_pattern='^[[:space:]]*(#|$)'
+while IFS= read -r line || [[ -n "$line" ]]; do
+ if [[ "$line" =~ $ignored_pattern ]]; then continue; fi
+ [[ "$line" =~ $revision_pattern ]] || fail 'Invalid installed SDK revision declaration'
+ [[ -z "$installed_revision" ]] || fail 'Duplicate installed SDK revision'
+ installed_revision=${BASH_REMATCH[1]}
+done < "$metadata"
+[[ "$installed_revision" == "$sdk_revision" ]] || fail 'Installed SDK revision mismatch'
+export ANAKIN_PREFIX="$prefix" ANAKIN_SDK_PREFIX="$sdk_prefix"
 export ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-87}
 export ROS_LOCALHOST_ONLY=1
 export RMW_IMPLEMENTATION=rmw_fastrtps_cpp

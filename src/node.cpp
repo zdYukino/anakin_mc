@@ -1,4 +1,5 @@
 #include <anakin_mc/policy.hpp>
+#include <anakin_mc/inference_gate.hpp>
 #include <anakin_mc/transactions.hpp>
 #include <anakin_mc/transition.hpp>
 #include <anakin_sdk/msg/control_target.hpp>
@@ -73,7 +74,6 @@ class Node final : public rclcpp::Node {
   rclcpp::Subscription<Frame>::SharedPtr sub_;
   rclcpp::Service<Switch>::SharedPtr service_;
   rclcpp::TimerBase::SharedPtr timer_, hello_;
-  Clock::time_point requested_at_{};
   void request(const Switch::Request& q, Switch::Response& a) {
     a.mc_instance_id = instance_;
     a.epoch = q.next_epoch;
@@ -138,7 +138,6 @@ class Node final : public rclcpp::Node {
     pending_ = true;
     started_ = false;
     status_ = nullptr;
-    requested_at_ = Clock::now();
     a.accepted = true;
     a.reason = Switch::Request::OK;
     a.execution_profile = q.execution_profile;
@@ -196,31 +195,12 @@ class Node final : public rclcpp::Node {
     }
     next_tick_ += 20ms;
     if (!status_) return;
-    if (pending_ && t - requested_at_ > std::chrono::seconds(current_.timeout.sec) +
-                                            std::chrono::nanoseconds(current_.timeout.nanosec)) {
-      fail("Switch deadline expired; fallback requires new env epoch");
-      return;
-    }
-    if (!latest_ || latest_->session_id != session_ || latest_->epoch != epoch_) return;
-    if (t - received_ > 40ms) {
-      if (started_) fail("State reception stale");
-      return;
-    }
     if (status_->state == Status::FAILED) return;
-    if (pending_ && t - requested_at_ > std::chrono::seconds(current_.timeout.sec) +
-                                            std::chrono::nanoseconds(current_.timeout.nanosec)) {
-      fail("Switch deadline expired; fallback requires new env epoch");
-      return;
-    }
-    const auto& f = *latest_;
-    if (f.gain_profile != current_.gain_profile ||
-        f.execution_profile != current_.execution_profile ||
-        f.command_semantics != current_.command_semantics) {
-      fail("State gain profile differs from transaction");
-      return;
-    }
-    if (f.state_seq < current_.source_state_seq || f.state_seq <= last_state_seq_) return;
-    last_state_seq_ = f.state_seq;
+    const auto decision = with_inference_frame(latest_.get(), current_, received_, t, last_state_seq_,
+        [this, planned_deadline](const Frame& frame) { infer_frame(frame, planned_deadline); });
+    if (decision == FrameDecision::ContractMismatch) fail("State execution contract differs from transaction");
+  }
+  void infer_frame(const Frame& f, Clock::time_point planned_deadline) {
     try {
       if (!started_) {
         source_ = active_;

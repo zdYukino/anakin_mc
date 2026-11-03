@@ -1,3 +1,5 @@
+> 历史记录：本文旧入口和验收状态保留当时事实。当前独立运行与持久等待合同见源码仓库 README；Env 默认 real，旧 `--loopback-sim` 已拒绝。
+
 # PD_REFERENCE finite checkpoint, 2026-10-27 15:58 UTC
 
 SDK v3 and communication-free A/B1 encoders are implemented and tested. Both PD_REFERENCE profiles remain disabled for native execution because three required execution budgets have no reliable source. No A/B1 floating or native loco/CR7/loco acceptance is claimed. This is a checkpoint for independent review, not an enabled controller or a safety certification.
